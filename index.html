@@ -76,6 +76,12 @@ button{cursor:pointer}
 .status.sold{background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
 
 .status + .status{margin-left:4px}
+.status.room{background:transparent;border:1px solid color-mix(in srgb,var(--green) 50%,transparent);color:var(--green)}
+.rooms-h{font-size:14px;font-weight:600;color:var(--muted);margin:14px 0 0}
+.rooms{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.rooms button{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:7px 12px;font-size:15px;font-weight:600}
+.rooms button b{font-family:"Barlow Condensed",sans-serif;font-size:19px;margin-left:8px;color:var(--green)}
+.rooms button[aria-pressed="true"]{border-color:var(--green);background:color-mix(in srgb,var(--green) 14%,var(--surface))}
 .status.partner{background:color-mix(in srgb,var(--amber) 24%,transparent);color:var(--ink)}
 .own{grid-template-columns:1fr 1fr}
 .own button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
@@ -239,6 +245,21 @@ textarea{min-height:70px;resize:vertical}
   </form>
 </dialog>
 
+<!-- Showroom -->
+<dialog id="roomDlg">
+  <form method="dialog" id="roomForm">
+    <h2>Ready: which showroom?</h2>
+    <div class="cats" id="roomPick" role="group" aria-label="Showrooms used before"></div>
+    <label>Showroom<input name="showroom" list="showrooms" placeholder="Type a showroom name"></label>
+    <p class="note">Tap one you used before, or type a new name.</p>
+    <div class="actions">
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+<datalist id="showrooms"></datalist>
+
 <!-- Backup -->
 <dialog id="backupDlg">
   <form method="dialog" id="backupForm">
@@ -262,7 +283,7 @@ textarea{min-height:70px;resize:vertical}
   const STATUS = {repair:"In repair", ready:"Ready", sold:"Sold"};
 
   let db = load();
-  let view = {name:"home", filter:"all", q:""};
+  let view = {name:"home", filter:"all", q:"", room:null};
   let editingCar = null, editingExp = null, pickedCat = CATS[1];
   let formOwn = "own", formPartners = [];
 
@@ -308,7 +329,11 @@ textarea{min-height:70px;resize:vertical}
     const q = view.q.trim().toLowerCase();
     let cars = db.cars.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
     if(view.filter!=="all") cars = cars.filter(c=>c.status===view.filter);
-    if(q) cars = cars.filter(c=>[c.make,c.model,c.year,c.vin,c.plate,c.source,c.color,(c.partners||[]).map(p=>p.name).join(" ")].join(" ").toLowerCase().includes(q));
+    if(q) cars = cars.filter(c=>[c.make,c.model,c.year,c.vin,c.plate,c.source,c.color,c.showroom,(c.partners||[]).map(p=>p.name).join(" ")].join(" ").toLowerCase().includes(q));
+    if(view.room!=null) cars = cars.filter(c=>c.status==="ready" && (c.showroom||"")===view.room);
+    const roomCount = {};
+    db.cars.filter(c=>c.status==="ready").forEach(c=>{ const r = c.showroom||""; roomCount[r] = (roomCount[r]||0)+1; });
+    const readyRooms = Object.entries(roomCount).sort((a,b)=> (a[0]==="") - (b[0]==="") || a[0].localeCompare(b[0]));
 
     app.innerHTML = `
       <header class="top">
@@ -327,6 +352,10 @@ textarea{min-height:70px;resize:vertical}
         <div class="tabs" role="group" aria-label="Filter by status">
           ${["all","repair","ready","sold"].map(f=>`<button data-f="${f}" aria-pressed="${view.filter===f}">${f==="all"?"All":STATUS[f]} (${f==="all"?db.cars.length:db.cars.filter(c=>c.status===f).length})</button>`).join("")}
         </div>
+        ${readyRooms.length ? `<p class="rooms-h">Ready cars by showroom</p>
+        <div class="rooms" role="group" aria-label="Filter by showroom">
+          ${readyRooms.map(([r,n])=>`<button data-room="${esc(r)}" aria-pressed="${view.room===r}">${esc(r||"No showroom")}<b>${n}</b></button>`).join("")}
+        </div>` : ""}
       </div>
       <div class="list">
         ${cars.length ? cars.map(ticket).join("") : `<p class="empty">No cars match this search.</p>`}
@@ -344,7 +373,8 @@ textarea{min-height:70px;resize:vertical}
     if(qEl){
       qEl.oninput = e => { view.q = e.target.value; const pos = e.target.selectionStart; renderHome(); const n = document.getElementById("q"); n.focus(); try{n.setSelectionRange(pos,pos);}catch(_){} };
     }
-    app.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{view.filter=b.dataset.f; renderHome();});
+    app.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{view.filter=b.dataset.f; view.room=null; renderHome();});
+    app.querySelectorAll("[data-room]").forEach(b=>b.onclick=()=>{ const r=b.dataset.room; if(view.room===r){ view.room=null; } else { view.room=r; view.filter="ready"; } renderHome(); });
     app.querySelectorAll("[data-car]").forEach(b=>b.onclick=()=>{view={...view,name:"car",id:b.dataset.car}; render(); window.scrollTo(0,0);});
   }
 
@@ -355,7 +385,7 @@ textarea{min-height:70px;resize:vertical}
       <span class="body">
         <h3>${esc(carName(c)) || "Unnamed car"}</h3>
         <div class="meta">${esc(meta)}</div>
-        <span class="status ${c.status}">${STATUS[c.status]}</span>${isPartner(c)?`<span class="status partner">Partnership</span>`:""}
+        <span class="status ${c.status}">${STATUS[c.status]}</span>${isPartner(c)?`<span class="status partner">Partnership</span>`:""}${c.status==="ready"&&c.showroom?`<span class="status room">At ${esc(c.showroom)}</span>`:""}
       </span>
       <span class="cost"><span class="num">${aed(carTotal(c))}</span><small>${c.expenses.length} expense${c.expenses.length===1?"":"s"}</small></span>
     </button>`;
@@ -393,6 +423,10 @@ textarea{min-height:70px;resize:vertical}
         <div class="seg" role="group" aria-label="Car status">
           ${Object.keys(STATUS).map(s=>`<button data-v="${s}" aria-pressed="${c.status===s}">${STATUS[s]}</button>`).join("")}
         </div>
+        ${c.status==="ready" ? `<div class="card" style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <span><span class="note">Showroom</span><br><b style="font-size:18px">${esc(c.showroom)||"Not set"}</b></span>
+          <button class="secondary" id="editRoom">${c.showroom?"Change":"Set showroom"}</button>
+        </div>` : ""}
         ${c.status==="sold" ? `<div class="card" style="margin-top:10px">
           ${sold ? `<div class="split" style="color:var(--muted)">
               <div>Sold for<b style="color:var(--ink)">${aed(num(c.salePrice))}</b></div>
@@ -435,6 +469,7 @@ textarea{min-height:70px;resize:vertical}
       <div class="section" style="padding-top:0">
         <h2>Purchase details</h2>
         <div class="card"><dl class="info">
+          ${c.showroom?`<dt>Showroom</dt><dd>${esc(c.showroom)}</dd>`:""}
           <dt>Ownership</dt><dd>${isPartner(c) ? "Partnership: " + c.partners.map(p=>esc(p.name||"Partner") + " " + pctTxt(p.pct)).join(", ") : "Own car"}</dd>
           <dt>Bought from</dt><dd>${esc(c.source)||"—"}</dd>
           <dt>Date</dt><dd>${fmtDate(c.purchaseDate)||"—"}</dd>
@@ -448,10 +483,12 @@ textarea{min-height:70px;resize:vertical}
     document.getElementById("editCar").onclick = ()=>openCar(c);
     document.getElementById("addExp").onclick = ()=>openExp(c,null);
     const es = document.getElementById("editSale"); if(es) es.onclick = ()=>openSold(c);
+    const er = document.getElementById("editRoom"); if(er) er.onclick = ()=>openRoom(c);
     app.querySelectorAll("[data-exp]").forEach(b=>b.onclick=()=>openExp(c, c.expenses.find(e=>e.id===b.dataset.exp)));
     app.querySelectorAll(".seg [data-v]").forEach(b=>b.onclick=()=>{
       const v = b.dataset.v;
       if(v==="sold"){ openSold(c); return; }
+      if(v==="ready"){ openRoom(c); return; }
       c.status = v; save(); render(); toast("Marked " + STATUS[v].toLowerCase());
     });
   }
@@ -461,6 +498,7 @@ textarea{min-height:70px;resize:vertical}
     db.cars.forEach(c=>{ if(c.source) src.add(c.source); c.expenses.forEach(e=>{ if(e.paidTo) pay.add(e.paidTo); }); });
     document.getElementById("sources").innerHTML = [...src].map(s=>`<option value="${esc(s)}">`).join("");
     document.getElementById("payees").innerHTML = [...pay].map(s=>`<option value="${esc(s)}">`).join("");
+    document.getElementById("showrooms").innerHTML = allRooms().map(s=>`<option value="${esc(s)}">`).join("");
   }
 
   /* ---------- Dialogs ---------- */
@@ -580,6 +618,25 @@ textarea{min-height:70px;resize:vertical}
     save(); soldDlg.close(); render(); toast("Marked sold");
   };
 
+  const roomDlg = document.getElementById("roomDlg"), roomForm = document.getElementById("roomForm");
+  function allRooms(){ return [...new Set(db.cars.map(c=>(c.showroom||"").trim()).filter(Boolean))].sort(); }
+  function openRoom(c){
+    editingCar = c; roomForm.reset();
+    roomForm.elements.showroom.value = c.showroom || "";
+    const pick = document.getElementById("roomPick"), rs = allRooms();
+    pick.style.display = rs.length ? "flex" : "none";
+    pick.innerHTML = rs.map(r=>`<button type="button" data-r="${esc(r)}" aria-pressed="${r===c.showroom}">${esc(r)}</button>`).join("");
+    pick.querySelectorAll("button").forEach(b=>b.onclick=()=>{ roomForm.elements.showroom.value = b.dataset.r; pick.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed", String(x===b))); });
+    roomDlg.showModal();
+  }
+  roomForm.onsubmit = e => {
+    e.preventDefault();
+    editingCar.status = "ready";
+    editingCar.showroom = roomForm.elements.showroom.value.trim();
+    save(); roomDlg.close(); render();
+    toast(editingCar.showroom ? "Ready at " + editingCar.showroom : "Marked ready");
+  };
+
   /* ---------- Backup ---------- */
   const backupDlg = document.getElementById("backupDlg");
   function openBackup(){
@@ -621,9 +678,10 @@ textarea{min-height:70px;resize:vertical}
   document.getElementById("btnCsv").onclick = async ()=>{
     const rows = [["Car","VIN","Plate","Status","Type","Date","Details","Paid to","Amount (AED)"]];
     db.cars.forEach(c=>{
-      rows.push([carName(c),c.vin,c.plate,STATUS[c.status],"Purchase",c.purchaseDate,c.source,c.source,num(c.purchasePrice)]);
+      const st = STATUS[c.status] + (c.showroom ? " (" + c.showroom + ")" : "");
+      rows.push([carName(c),c.vin,c.plate,st,"Purchase",c.purchaseDate,c.source,c.source,num(c.purchasePrice)]);
       c.expenses.forEach(e=>rows.push([carName(c),c.vin,c.plate,STATUS[c.status],e.cat,e.date,e.desc,e.paidTo,num(e.amount)]));
-      rows.push([carName(c),c.vin,c.plate,STATUS[c.status],"TOTAL COST","","","",carTotal(c)]);
+      rows.push([carName(c),c.vin,c.plate,st,"TOTAL COST","","","",carTotal(c)]);
       if(isPartner(c)) c.partners.forEach(p=>rows.push([carName(c),c.vin,c.plate,STATUS[c.status],"Share of cost","",(p.name||"Partner") + " " + pctTxt(p.pct),p.name,Math.round(carTotal(c)*num(p.pct))/100]));
       if(c.status==="sold" && c.salePrice!=null) rows.push([carName(c),c.vin,c.plate,"Sold","Sale price",c.saleDate,"","",num(c.salePrice)]);
     });
@@ -635,7 +693,7 @@ textarea{min-height:70px;resize:vertical}
     let d; try{ d = JSON.parse(text); }catch(e){ toast("That isn’t a valid backup."); return; }
     if(!d || !Array.isArray(d.cars)){ toast("That isn’t a valid backup."); return; }
     if(db.cars.length && !confirm("Replace the " + db.cars.length + " car(s) on this phone with the " + d.cars.length + " car(s) in the backup?")) return;
-    d.cars.forEach(c=>{ c.expenses = Array.isArray(c.expenses)?c.expenses:[]; c.status = STATUS[c.status]?c.status:"repair"; c.partners = Array.isArray(c.partners)?c.partners:[]; c.ownership = (c.ownership==="partner" && c.partners.length) ? "partner" : "own"; });
+    d.cars.forEach(c=>{ c.expenses = Array.isArray(c.expenses)?c.expenses:[]; c.status = STATUS[c.status]?c.status:"repair"; c.partners = Array.isArray(c.partners)?c.partners:[]; c.ownership = (c.ownership==="partner" && c.partners.length) ? "partner" : "own"; c.showroom = typeof c.showroom==="string" ? c.showroom : ""; });
     db = d; save(); backupDlg.close(); view = {name:"home", filter:"all", q:""}; render(); toast("Restored " + d.cars.length + " car(s)");
   }
   document.getElementById("importFile").onchange = e => {
